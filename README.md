@@ -5,6 +5,26 @@ This repository demonstrates the performance difference between two approaches f
 1. **go:wasmexport** - Direct function exports from WASM module
 2. **go:wasmimport** - Host function imports with channel-based communication
 
+## Results
+
+Benchmark results show a significant performance difference:
+
+```
+goos: darwin
+goarch: arm64
+cpu: Apple M4 Max
+BenchmarkAdd-14 (exported)    43554006    27.97 ns/op
+BenchmarkAdd-14 (imported)     2390948   514.6 ns/op
+```
+
+```mermaid
+xychart-beta
+    title "WebAssembly Performance: go:wasmexport vs go:wasmimport"
+    x-axis ["go:wasmexport", "go:wasmimport"]
+    y-axis "Nanoseconds per operation" 0 --> 600
+    bar [27.97, 514.6]
+```
+
 ## Implementation Details
 
 ### Exported Approach ([`exported/`](./exported))
@@ -44,29 +64,6 @@ The **imported** approach uses `go:wasmimport` with a more complex communication
   - Uses Go channels for communication between host and WASM
   - Runs WASM module in a separate goroutine
   - More complex setup with wazergo for host module definition
-
-## Performance Results
-
-Benchmark results show a significant performance difference:
-
-```
-goos: darwin
-goarch: arm64
-cpu: Apple M4 Max
-BenchmarkAdd-14 (exported)    43554006    27.97 ns/op
-BenchmarkAdd-14 (imported)     2390948   514.6 ns/op
-```
-
-**Performance Analysis:**
-- **Exported approach**: ~28 ns/op
-- **Imported approach**: ~515 ns/op
-- **Performance difference**: ~18x slower for the imported approach
-
-The imported approach is significantly slower due to:
-1. Channel communication overhead
-2. Goroutine context switching 
-3. More complex call stack through host module bridge
-4. Additional memory allocations for channel operations
 
 ## Usage
 
