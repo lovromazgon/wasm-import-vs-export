@@ -16,19 +16,19 @@ import (
 
 var path = "module/module.wasm" // Path to the WASM file to be executed.
 
-type MyModule struct {
-	req chan tuple[int32, int32]
-	res chan int32
+type CubeModule struct {
+	req chan<- int32
+	res <-chan int32
 
 	m api.Module
 }
 
-func (my *MyModule) Add(i, j int32) int32 {
-	my.req <- tuple[int32, int32]{i, j}
+func (my *CubeModule) Cube(i int32) int32 {
+	my.req <- i
 	return <-my.res
 }
 
-func (my *MyModule) Close(ctx context.Context) error {
+func (my *CubeModule) Close(ctx context.Context) error {
 	return my.m.Close(ctx)
 }
 
@@ -40,18 +40,18 @@ func main() {
 	defer r.Close(ctx)
 	wasi_snapshot_preview1.MustInstantiate(ctx, r)
 
-	m, err := NewModule(ctx, r, path)
+	m, err := NewCubeModule(ctx, r, path)
 	if err != nil {
 		panic(err)
 	}
 
-	var a, b int32 = 1, 2
-	c := m.Add(a, b)
+	var a int32 = 2
+	b := m.Cube(a)
 
-	fmt.Printf("add(%d, %d) = %d\n", a, b, c)
+	fmt.Printf("cube(%d) = %d\n", a, b)
 
-	d := m.Add(b, c)
-	fmt.Printf("add(%d, %d) = %d\n", b, c, d)
+	c := m.Cube(b)
+	fmt.Printf("cube(%d) = %d\n", b, c)
 
 	err = m.Close(ctx)
 	if err != nil {
@@ -59,7 +59,7 @@ func main() {
 	}
 }
 
-func NewModule(ctx context.Context, r wazero.Runtime, path string) (*MyModule, error) {
+func NewCubeModule(ctx context.Context, r wazero.Runtime, path string) (*CubeModule, error) {
 	compiledHostModule, err := wazergo.Compile(ctx, r, hostModule)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compile host module: %w", err)
@@ -68,7 +68,7 @@ func NewModule(ctx context.Context, r wazero.Runtime, path string) (*MyModule, e
 	// Configure the module to initialize the reactor.
 	config := wazero.NewModuleConfig().WithStartFunctions()
 
-	req := make(chan tuple[int32, int32], 1)
+	req := make(chan int32, 1)
 	res := make(chan int32, 1)
 
 	ins, err := compiledHostModule.Instantiate(ctx, hostModuleOptions(req, res))
@@ -89,7 +89,7 @@ func NewModule(ctx context.Context, r wazero.Runtime, path string) (*MyModule, e
 	}
 
 	go runModule(ctx, wasmModule)
-	return &MyModule{
+	return &CubeModule{
 		req: req,
 		res: res,
 		m:   wasmModule,
@@ -126,8 +126,8 @@ func runModule(
 // hostModule declares the host module that is exported to the WASM module. The
 // host module is used to communicate between the WASM module (processor) and Conduit.
 var hostModule wazergo.HostModule[*hostModuleInstance] = hostModuleFunctions{
-	"add_request":  F2((*hostModuleInstance).addRequest),
-	"add_response": F1((*hostModuleInstance).addResponse),
+	"cube_request":  wazergo.F0((*hostModuleInstance).cubeRequest),
+	"cube_response": F1((*hostModuleInstance).cubeResponse),
 }
 
 // hostModuleFunctions type implements HostModule, providing the module name,
@@ -156,45 +156,30 @@ func (f hostModuleFunctions) Instantiate(_ context.Context, opts ...hostModuleOp
 type hostModuleOption = wazergo.Option[*hostModuleInstance]
 
 func hostModuleOptions(
-	chanRequests chan tuple[int32, int32],
+	chanRequests chan int32,
 	chanResponses chan int32,
 ) hostModuleOption {
 	return wazergo.OptionFunc(func(m *hostModuleInstance) {
-		m.addRequests = chanRequests
-		m.addResponses = chanResponses
+		m.cubeRequests = chanRequests
+		m.cubeResponses = chanResponses
 	})
 }
 
 // hostModuleInstance is used to maintain the state of our module instance.
 type hostModuleInstance struct {
-	addRequests  chan tuple[int32, int32]
-	addResponses chan int32
+	cubeRequests  chan int32
+	cubeResponses chan int32
 }
 
 func (*hostModuleInstance) Close(context.Context) error { return nil }
 
-func (m *hostModuleInstance) addRequest(ctx context.Context, i, j types.Pointer[types.Int32]) {
-	req := <-m.addRequests
-	i.Store(types.Int32(req.V1))
-	j.Store(types.Int32(req.V2))
+func (m *hostModuleInstance) cubeRequest(ctx context.Context) types.Int32 {
+	req := <-m.cubeRequests
+	return types.Int32(req)
 }
 
-func (m *hostModuleInstance) addResponse(ctx context.Context, out types.Int32) {
-	m.addResponses <- int32(out)
-}
-
-// F2R is the Function constructor for functions accepting no parameters and returning 2.
-func F2R[T any, R1 types.Result, R2 types.Result](fn func(T, context.Context) (R1, R2)) wazergo.Function[T] {
-	var ret1 R1
-	var ret2 R2
-	return wazergo.Function[T]{
-		Results: []types.Value{ret1, ret2},
-		Func: func(this T, ctx context.Context, module api.Module, stack []uint64) {
-			r1, r2 := fn(this, ctx)
-			r1.StoreValue(module.Memory(), stack)
-			r2.StoreValue(module.Memory(), stack[len(r1.ValueTypes()):])
-		},
-	}
+func (m *hostModuleInstance) cubeResponse(ctx context.Context, out types.Int32) {
+	m.cubeResponses <- int32(out)
 }
 
 // F1 is the Function constructor for functions accepting one parameter.
@@ -209,36 +194,4 @@ func F1[T any, P types.Param[P]](fn func(T, context.Context, P)) wazergo.Functio
 			fn(this, ctx, arg.LoadValue(memory, stack))
 		},
 	}
-}
-
-// F1 is the Function constructor for functions accepting two parameters.
-func F2[
-	T any,
-	P1 types.Param[P1],
-	P2 types.Param[P2],
-](fn func(T, context.Context, P1, P2)) wazergo.Function[T] {
-	var arg1 P1
-	var arg2 P2
-	params1 := arg1.ValueTypes()
-	params2 := arg2.ValueTypes()
-	a := len(params1)
-	b := len(params2) + a
-	return wazergo.Function[T]{
-		Params:  []types.Value{arg1, arg2},
-		Results: []types.Value{},
-		Func: func(this T, ctx context.Context, module api.Module, stack []uint64) {
-			var arg1 P1
-			var arg2 P2
-			var memory = module.Memory()
-			fn(this, ctx,
-				arg1.LoadValue(memory, stack[0:a:a]),
-				arg2.LoadValue(memory, stack[a:b:b]),
-			)
-		},
-	}
-}
-
-type tuple[T1, T2 any] struct {
-	V1 T1
-	V2 T2
 }

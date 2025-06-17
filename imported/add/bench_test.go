@@ -18,7 +18,7 @@ func BenchmarkAdd(b *testing.B) {
 	defer r.Close(ctx)
 	wasi_snapshot_preview1.MustInstantiate(ctx, r)
 
-	m, err := NewModule(ctx, r, path)
+	m, err := NewAddModule(ctx, r, path)
 	if err != nil {
 		b.Fatalf("failed to create module: %v", err)
 	}
